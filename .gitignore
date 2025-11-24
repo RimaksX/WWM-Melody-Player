@@ -1,0 +1,11 @@
+__pycache__/
+build/
+dist/
+*.spec
+venv/
+.idea/
+.vscode/
+config.json
+locales/
+Music/
+*.exe
