@@ -9,21 +9,17 @@ import json
 import sys
 from colorama import init, Fore, Style
 
-# Сброс цвета
 init(autoreset=True)
 
-# --- КОНФИГУРАЦИЯ ---
 BIND_START = 'f8'
 BIND_STOP = 'esc'
 PRESS_DURATION = 0.03
 pydirectinput.PAUSE = 0.0
 
-# Папки
 TRACKS_DIR = 'Music'
 LOCALES_DIR = 'locales'
 CONFIG_FILE = 'config.json'
 
-# WWM Range (C3 - B5)
 GAME_MIN_NOTE = 48
 GAME_MAX_NOTE = 83
 KEYS = {
@@ -33,7 +29,6 @@ KEYS = {
 }
 SCALE_WHITE_KEYS = {0: 0, 2: 1, 4: 2, 5: 3, 7: 4, 9: 5, 11: 6}
 
-# --- ВСТРОЕННЫЕ ЯЗЫКИ (ДЛЯ САМОРАЗВЕРТЫВАНИЯ) ---
 EMBEDDED_LOCALES = {
     "en": {
         "lang_name": "English",
@@ -101,7 +96,6 @@ EMBEDDED_LOCALES = {
     }
 }
 
-# --- COLOR THEME ---
 C_TITLE = Style.BRIGHT + Fore.WHITE
 C_TEXT = Style.BRIGHT + Fore.WHITE
 C_ACCENT = Fore.YELLOW
@@ -116,30 +110,24 @@ class BardApp:
         self.lang = 'en'
         self.texts = {}
 
-        # 1. Развертывание файловой системы
         self.initialize_filesystem()
 
-        # 2. Загрузка
         self.load_config()
         self.load_locale()
 
     def initialize_filesystem(self):
-        """Создает папки и файлы, если их нет"""
-        # Создаем папку для треков
         if not os.path.exists(TRACKS_DIR):
             try:
                 os.makedirs(TRACKS_DIR)
             except:
                 pass
 
-        # Создаем папку локализации
         if not os.path.exists(LOCALES_DIR):
             try:
                 os.makedirs(LOCALES_DIR)
             except:
                 pass
 
-        # Создаем файлы языков по умолчанию, если их нет
         for lang_code, content in EMBEDDED_LOCALES.items():
             file_path = os.path.join(LOCALES_DIR, f"{lang_code}.json")
             if not os.path.exists(file_path):
@@ -164,7 +152,6 @@ class BardApp:
     def load_locale(self):
         path = os.path.join(LOCALES_DIR, f'{self.lang}.json')
 
-        # Пытаемся загрузить внешний файл
         if os.path.exists(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
@@ -173,13 +160,11 @@ class BardApp:
             except:
                 pass
 
-        # Если файла нет или ошибка - берем из памяти
         self.texts = EMBEDDED_LOCALES.get(self.lang, EMBEDDED_LOCALES['en'])
 
     def t(self, key):
         return self.texts.get(key, f"[{key}]")
 
-    # --- UI HELPERS ---
     def clear(self):
         os.system('cls' if os.name == 'nt' else 'clear')
 
@@ -196,7 +181,6 @@ class BardApp:
     def input_prompt(self):
         return input(f"\n{C_INPUT}> {Style.RESET_ALL}")
 
-    # --- LOGIC ---
     def press_worker(self, key):
         pydirectinput.keyDown(key)
         time.sleep(PRESS_DURATION)
@@ -235,7 +219,7 @@ class BardApp:
 
     def process_note(self, note, shift, mode):
         final_note = note + shift
-        if mode == 2:  # FOLD
+        if mode == 2:
             while final_note > GAME_MAX_NOTE: final_note -= 12
             while final_note < GAME_MIN_NOTE: final_note += 12
         octave = (final_note // 12) - 1
@@ -244,7 +228,6 @@ class BardApp:
             return KEYS[octave][SCALE_WHITE_KEYS[base]]
         return None
 
-    # --- MENUS ---
     def menu_main(self):
         while True:
             self.clear()
@@ -304,7 +287,6 @@ class BardApp:
     def menu_player(self):
         while True:
             self.clear()
-            # Сканируем папку Music
             files = []
             if os.path.exists(TRACKS_DIR):
                 files = [f for f in os.listdir(TRACKS_DIR) if f.lower().endswith(('.mid', '.midi'))]
@@ -327,9 +309,8 @@ class BardApp:
                 if raw == '0': return
                 idx = int(raw) - 1
                 if 0 <= idx < len(files):
-                    # Передаем полный путь к файлу
                     full_path = os.path.join(TRACKS_DIR, files[idx])
-                    self.play_logic(full_path, files[idx])  # передаем имя отдельно для заголовка
+                    self.play_logic(full_path, files[idx])
             except:
                 continue
 
@@ -347,12 +328,10 @@ class BardApp:
         rec_mode = 1 if pct_s >= 90 else 2
         rec_str = "Strict" if rec_mode == 1 else "Fold"
 
-        # Stats
         print(
             f"{C_TEXT}{self.t('player_stats')}: {C_SUCCESS}{pct_s:.0f}% Strict {C_TEXT}| {C_SUCCESS}{pct_f:.0f}% Fold")
         print(f"{C_SUCCESS}{self.t('rec_title')}: {rec_str.upper()} {C_TEXT}({self.t('ui_shift_label')}: {shift})")
 
-        # Mode Selector
         print(f"\n{C_TITLE}{self.t('mode_title').upper()}")
         print(f"{SEPARATOR}")
         print(f"{C_ACCENT}[1] {C_TEXT}Strict {C_TEXT}- {self.t('mode_strict_desc')}")
@@ -371,7 +350,6 @@ class BardApp:
 
         if mode == 3 and notes: shift = GAME_MAX_NOTE - max(notes)
 
-        # PRE-PLAY
         self.clear()
         self.print_header(display_name)
 
@@ -382,7 +360,6 @@ class BardApp:
         print(f"{C_ACCENT}{self.t('play_controls_pre')}")
         self.print_back_option()
 
-        # Wait loop
         start_playing = False
         while True:
             if keyboard.is_pressed(BIND_START):
@@ -397,7 +374,6 @@ class BardApp:
             time.sleep(0.3)
             return
 
-        # PLAYING
         print(f"\n{C_SUCCESS}{self.t('play_controls_active')}")
 
         mid = mido.MidiFile(full_path)
