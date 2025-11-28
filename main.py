@@ -7,28 +7,47 @@ import keyboard
 import threading
 import json
 import sys
+from queue import Queue, Empty
 from colorama import init, Fore, Style
 
+# Сброс цвета
 init(autoreset=True)
 
+# --- CONFIG ---
 BIND_START = 'f8'
 BIND_STOP = 'esc'
-PRESS_DURATION = 0.03
+
+# Тайминги (Extreme Low Latency)
+BATCH_WINDOW = 0.02
+KEY_TAP = 0.002
+MOD_DELAY = 0.015
+
 pydirectinput.PAUSE = 0.0
+
+GAME_MIN_NOTE = 48
+GAME_MAX_NOTE = 83
 
 TRACKS_DIR = 'Music'
 LOCALES_DIR = 'locales'
 CONFIG_FILE = 'config.json'
 
-GAME_MIN_NOTE = 48
-GAME_MAX_NOTE = 83
-KEYS = {
+# --- MAPPINGS ---
+KEYS_21 = {
     3: ['z', 'x', 'c', 'v', 'b', 'n', 'm'],
     4: ['a', 's', 'd', 'f', 'g', 'h', 'j'],
     5: ['q', 'w', 'e', 'r', 't', 'y', 'u']
 }
-SCALE_WHITE_KEYS = {0: 0, 2: 1, 4: 2, 5: 3, 7: 4, 9: 5, 11: 6}
 
+MAP_36 = {
+    0: [('z', 0), ('a', 0), ('q', 0)], 1: [('z', 1), ('a', 1), ('q', 1)],
+    2: [('x', 0), ('s', 0), ('w', 0)], 3: [('c', 2), ('d', 2), ('e', 2)],
+    4: [('c', 0), ('d', 0), ('e', 0)], 5: [('v', 0), ('f', 0), ('r', 0)],
+    6: [('v', 1), ('f', 1), ('r', 1)], 7: [('b', 0), ('g', 0), ('t', 0)],
+    8: [('b', 1), ('g', 1), ('t', 1)], 9: [('n', 0), ('h', 0), ('y', 0)],
+    10: [('m', 2), ('j', 2), ('u', 2)], 11: [('m', 0), ('j', 0), ('u', 0)]
+}
+
+# --- ПОЛНЫЕ ВСТРОЕННЫЕ ЯЗЫКИ (ЭТАЛОН) ---
 EMBEDDED_LOCALES = {
     "en": {
         "lang_name": "English",
@@ -38,29 +57,40 @@ EMBEDDED_LOCALES = {
         "menu_exit": "Exit",
         "settings_title": "Settings",
         "settings_lang_title": "Interface Language",
-        "settings_select": "Select language number:",
-        "settings_changed": "Language changed!",
+        "settings_layout_title": "Keyboard Layout",
+        "settings_select": "Select option:",
+        "settings_saved": "Settings saved!",
         "player_list_title": "Track List",
-        "player_no_files": f"No MIDI files found in '{TRACKS_DIR}' folder.",
+        "player_no_files": "No MIDI files found in 'Music' folder.",
         "player_select": "Select track number:",
-        "player_analyzing": "Analyzing harmony...",
-        "player_stats": "Compatibility",
-        "rec_title": "Recommendation",
-        "rec_strict": "High Accuracy",
-        "rec_fold": "Full Range",
-        "mode_title": "Select Playback Mode",
-        "mode_auto": "Press Enter for recommended",
-        "mode_strict_desc": "Clean sound. Skips notes outside range.",
-        "mode_fold_desc": "Rich sound. Wraps notes into range.",
-        "mode_melody_desc": "Solo mode. Forces melody to highs.",
-        "ui_mode_label": "Mode",
-        "ui_shift_label": "Shift",
+        "player_analyzing": "Analyzing Harmony...",
+        "step_layout_title": "Step 1: Choose Layout",
+        "step_mode_title": "Step 2: Choose Mode",
+        "stat_header": "COMPATIBILITY REPORT",
+        "stat_compatible": "Playable Notes",
+        "layout_21": "21 Keys (Standard)",
+        "layout_36": "36 Keys (Chromatic)",
+        "rec_title": "RECOMMENDATION",
+        "rec_layout_21_reason": "Simple track (White keys only).",
+        "rec_layout_36_reason": "Complex track (Contains accidentals).",
+        "rec_mode_strict_reason": "Fits perfectly in range.",
+        "rec_mode_fold_reason": "Wide range. Folding required.",
+        "mode_strict": "Strict",
+        "mode_fold": "Fold",
+        "mode_melody": "Melody",
+        "desc_strict": "Clean sound. Skips notes outside range.",
+        "desc_fold": "Full sound. Wraps notes into range.",
+        "desc_melody": "Solo mode. Prioritizes high notes.",
         "ui_back": "Back",
-        "play_ready": "Ready to play",
-        "play_controls_pre": "[F8] Start",
-        "play_controls_active": ">>> [F8] Playing... | [ESC] Stop <<<",
-        "play_stopped": "Stopped by user.",
-        "play_done": "Track finished."
+        "ui_auto": "Press Enter for recommended",
+        "ui_layout": "Layout",
+        "ui_mode": "Mode",
+        "ui_shift": "Transpose",
+        "play_ready": "READY TO PLAY",
+        "play_ctrl_start": "[F8] Start Playback",
+        "play_ctrl_active": ">>> [F8] Playing...  |  [ESC] Stop <<<",
+        "play_stopped": "Stopped.",
+        "play_done": "Finished."
     },
     "ru": {
         "lang_name": "Русский",
@@ -70,72 +100,144 @@ EMBEDDED_LOCALES = {
         "menu_exit": "Выход",
         "settings_title": "Настройки",
         "settings_lang_title": "Язык интерфейса",
-        "settings_select": "Введите номер языка:",
-        "settings_changed": "Язык изменен!",
+        "settings_layout_title": "Настройка раскладки",
+        "settings_select": "Выберите опцию:",
+        "settings_saved": "Настройки сохранены!",
         "player_list_title": "Список треков",
-        "player_no_files": f"MIDI файлы не найдены в папке '{TRACKS_DIR}'.",
-        "player_select": "Введите номер трека:",
+        "player_no_files": "Нет файлов в папке 'Music'.",
+        "player_select": "Номер трека:",
         "player_analyzing": "Анализ гармонии...",
-        "player_stats": "Совместимость",
-        "rec_title": "Рекомендация",
-        "rec_strict": "Высокая точность",
-        "rec_fold": "Полный диапазон",
-        "mode_title": "Режим воспроизведения",
-        "mode_auto": "Нажмите Enter для авто-выбора",
-        "mode_strict_desc": "Чистый звук. Пропуск нот вне диапазона.",
-        "mode_fold_desc": "Насыщенный звук. Сжатие октав.",
-        "mode_melody_desc": "Соло режим. Мелодия на высоких нотах.",
-        "ui_mode_label": "Режим",
-        "ui_shift_label": "Сдвиг",
+        "step_layout_title": "Шаг 1: Выбор раскладки",
+        "step_mode_title": "Шаг 2: Выбор режима",
+        "stat_header": "ОТЧЕТ О СОВМЕСТИМОСТИ",
+        "stat_compatible": "Попадание в ноты",
+        "layout_21": "21 Клавиша (Стандарт)",
+        "layout_36": "36 Клавиш (Хроматика)",
+        "rec_title": "РЕКОМЕНДАЦИЯ",
+        "rec_layout_21_reason": "Трек простой (Только белые клавиши).",
+        "rec_layout_36_reason": "Трек сложный (Есть черные клавиши).",
+        "rec_mode_strict_reason": "Все ноты влезают в диапазон.",
+        "rec_mode_fold_reason": "Широкий диапазон. Нужно сжатие.",
+        "mode_strict": "Strict (Чистый)",
+        "mode_fold": "Fold (Полный)",
+        "mode_melody": "Melody (Соло)",
+        "desc_strict": "Пропуск нот вне диапазона.",
+        "desc_fold": "Сжатие октав (все ноты).",
+        "desc_melody": "Приоритет высоких нот.",
         "ui_back": "Назад",
-        "play_ready": "Готов к запуску",
-        "play_controls_pre": "[F8] Старт",
-        "play_controls_active": ">>> [F8] Играет... | [ESC] Стоп <<<",
-        "play_stopped": "Остановлено пользователем.",
-        "play_done": "Трек завершен."
+        "ui_auto": "Нажмите Enter для авто-выбора",
+        "ui_layout": "Раскладка",
+        "ui_mode": "Режим",
+        "ui_shift": "Сдвиг",
+        "play_ready": "ГОТОВ К ЗАПУСКУ",
+        "play_ctrl_start": "[F8] Начать воспроизведение",
+        "play_ctrl_active": ">>> [F8] Играет...  |  [ESC] Стоп <<<",
+        "play_stopped": "Остановлено.",
+        "play_done": "Готово."
     }
 }
 
+# --- THEME ---
 C_TITLE = Style.BRIGHT + Fore.WHITE
 C_TEXT = Style.BRIGHT + Fore.WHITE
 C_ACCENT = Fore.YELLOW
 C_SUCCESS = Fore.GREEN
 C_ERROR = Fore.RED
 C_INPUT = Fore.CYAN
+C_DIM = Fore.LIGHTBLACK_EX
 SEPARATOR = Fore.WHITE + "————————————————————"
+
+
+class InputEngine(threading.Thread):
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.queue = Queue()
+        self.running = True
+        self.lock = threading.Lock()
+
+    def add_note(self, key, modifier):
+        self.queue.put((key, modifier))
+
+    def run(self):
+        batch = []
+        last_time = 0
+        while self.running:
+            try:
+                if not batch:
+                    batch.append(self.queue.get(timeout=0.1))
+                    last_time = time.time()
+                while True:
+                    if self.queue.empty(): break
+                    if (time.time() - last_time) > BATCH_WINDOW: break
+                    try:
+                        batch.append(self.queue.get_nowait())
+                    except Empty:
+                        break
+                if batch:
+                    self.execute_batch(batch)
+                    batch = []
+            except Empty:
+                continue
+            except Exception as e:
+                print(e)
+
+    def execute_batch(self, batch):
+        g_none, g_shift, g_ctrl = [], [], []
+        for k, m in batch:
+            if m == 0:
+                g_none.append(k)
+            elif m == 1:
+                g_shift.append(k)
+            elif m == 2:
+                g_ctrl.append(k)
+
+        with self.lock:
+            if g_none:
+                for k in g_none: pydirectinput.keyDown(k)
+                time.sleep(KEY_TAP)
+                for k in g_none: pydirectinput.keyUp(k)
+            if g_shift:
+                pydirectinput.keyDown('shift');
+                time.sleep(MOD_DELAY)
+                for k in g_shift: pydirectinput.keyDown(k)
+                time.sleep(KEY_TAP)
+                for k in g_shift: pydirectinput.keyUp(k)
+                time.sleep(0.002);
+                pydirectinput.keyUp('shift')
+            if g_ctrl:
+                pydirectinput.keyDown('ctrl');
+                time.sleep(MOD_DELAY)
+                for k in g_ctrl: pydirectinput.keyDown(k)
+                time.sleep(KEY_TAP)
+                for k in g_ctrl: pydirectinput.keyUp(k)
+                time.sleep(0.002);
+                pydirectinput.keyUp('ctrl')
 
 
 class BardApp:
     def __init__(self):
         self.lang = 'en'
         self.texts = {}
+        self.engine = InputEngine()
+        self.engine.start()
 
-        self.initialize_filesystem()
-
+        self.init_files()
         self.load_config()
         self.load_locale()
 
-    def initialize_filesystem(self):
-        if not os.path.exists(TRACKS_DIR):
+    def init_files(self):
+        if not os.path.exists(TRACKS_DIR): os.makedirs(TRACKS_DIR)
+        if not os.path.exists(LOCALES_DIR): os.makedirs(LOCALES_DIR)
+
+        # ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ ЛОКАЛИЗАЦИЮ ПРИ ЗАПУСКЕ
+        # Это гарантирует, что пользователь увидит новые тексты, а не старые версии файлов
+        for code, content in EMBEDDED_LOCALES.items():
+            path = os.path.join(LOCALES_DIR, f"{code}.json")
             try:
-                os.makedirs(TRACKS_DIR)
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(content, f, indent=4, ensure_ascii=False)
             except:
                 pass
-
-        if not os.path.exists(LOCALES_DIR):
-            try:
-                os.makedirs(LOCALES_DIR)
-            except:
-                pass
-
-        for lang_code, content in EMBEDDED_LOCALES.items():
-            file_path = os.path.join(LOCALES_DIR, f"{lang_code}.json")
-            if not os.path.exists(file_path):
-                try:
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        json.dump(content, f, indent=4, ensure_ascii=False)
-                except Exception as e:
-                    print(f"Error creating locale {lang_code}: {e}")
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -146,12 +248,15 @@ class BardApp:
                 pass
 
     def save_config(self):
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump({'language': self.lang}, f)
+        try:
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump({'language': self.lang}, f)
+        except:
+            pass
 
     def load_locale(self):
+        # Пытаемся загрузить с диска, если не выходит - берем из памяти
         path = os.path.join(LOCALES_DIR, f'{self.lang}.json')
-
         if os.path.exists(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
@@ -159,7 +264,6 @@ class BardApp:
                     return
             except:
                 pass
-
         self.texts = EMBEDDED_LOCALES.get(self.lang, EMBEDDED_LOCALES['en'])
 
     def t(self, key):
@@ -168,28 +272,19 @@ class BardApp:
     def clear(self):
         os.system('cls' if os.name == 'nt' else 'clear')
 
-    def print_header(self, title):
-        print(f"\n{C_TITLE}{title.upper()}")
-        print(f"{SEPARATOR}")
+    def header(self, txt):
+        print(f"\n{C_TITLE}{txt.upper()}\n{SEPARATOR}")
 
-    def print_menu_item(self, index, text):
-        print(f"{C_ACCENT}[{index}] {C_TEXT}{text}")
-
-    def print_back_option(self):
-        print(f"\n{C_ACCENT}[0] {C_TEXT}{self.t('ui_back')}")
-
-    def input_prompt(self):
+    def prompt(self):
         return input(f"\n{C_INPUT}> {Style.RESET_ALL}")
 
-    def press_worker(self, key):
-        pydirectinput.keyDown(key)
-        time.sleep(PRESS_DURATION)
-        pydirectinput.keyUp(key)
+    def print_back(self):
+        print(f"\n{C_ACCENT}[0] {C_TEXT}{self.t('ui_back')}")
 
-    def get_clean_notes(self, midi_file):
+    def get_notes(self, path):
         notes = []
         try:
-            mid = mido.MidiFile(midi_file)
+            mid = mido.MidiFile(path)
             for msg in mid:
                 if msg.type == 'note_on' and msg.velocity > 0:
                     if hasattr(msg, 'channel') and msg.channel == 9: continue
@@ -198,89 +293,98 @@ class BardApp:
             pass
         return notes
 
-    def analyze_best_shift(self, notes):
-        if not notes: return 0
-        best_shift = 0
-        max_score = -float('inf')
-        for shift in range(-12, 13):
-            score = 0
-            for note in notes:
-                t = note + shift
-                if (t % 12) in SCALE_WHITE_KEYS:
-                    score += 10
-                else:
-                    score -= 50
-                if GAME_MIN_NOTE <= t <= GAME_MAX_NOTE:
-                    score += 5
-                else:
-                    score -= 2
-            if score > max_score: max_score, best_shift = score, shift
-        return best_shift
+    def analyze(self, notes):
+        if not notes: return (0, 0, 0, 0, 0, 0)
+        total = len(notes)
+        scale_21 = {0, 2, 4, 5, 7, 9, 11}
 
-    def process_note(self, note, shift, mode):
-        final_note = note + shift
+        best_sh21 = 0;
+        max_s21 = -1
+        for sh in range(-12, 13):
+            hits = 0
+            for n in notes:
+                t = n + sh
+                if (t % 12) in scale_21 and GAME_MIN_NOTE <= t <= GAME_MAX_NOTE: hits += 1
+            if hits > max_s21: max_s21, best_sh21 = hits, sh
+
+        fold_hits_21 = sum(1 for n in notes if ((n + best_sh21) % 12) in scale_21)
+
+        best_sh36 = 0;
+        max_s36 = -1
+        for sh in range(-12, 13):
+            hits = sum(1 for n in notes if GAME_MIN_NOTE <= (n + sh) <= GAME_MAX_NOTE)
+            if hits > max_s36: max_s36, best_sh36 = hits, sh
+
+        return (best_sh21, (max_s21 / total) * 100, (fold_hits_21 / total) * 100,
+                best_sh36, (max_s36 / total) * 100, 100.0)
+
+    def get_key(self, note, shift, mode, layout):
+        final = note + shift
         if mode == 2:
-            while final_note > GAME_MAX_NOTE: final_note -= 12
-            while final_note < GAME_MIN_NOTE: final_note += 12
-        octave = (final_note // 12) - 1
-        base = final_note % 12
-        if base in SCALE_WHITE_KEYS and octave in KEYS:
-            return KEYS[octave][SCALE_WHITE_KEYS[base]]
+            while final > GAME_MAX_NOTE: final -= 12
+            while final < GAME_MIN_NOTE: final += 12
+        oct = (final // 12) - 1
+        base = final % 12
+
+        if layout == 36:
+            if oct in [3, 4, 5]: return MAP_36[base][oct - 3]
+        else:
+            scale = {0: 0, 2: 1, 4: 2, 5: 3, 7: 4, 9: 5, 11: 6}
+            if base in scale and oct in KEYS_21:
+                return (KEYS_21[oct][scale[base]], 0)
         return None
+
+    def color_stat(self, val):
+        if val >= 99: return C_SUCCESS
+        if val >= 80: return C_ACCENT
+        return C_ERROR
 
     def menu_main(self):
         while True:
             self.clear()
-            self.print_header(self.t('app_title'))
-
-            self.print_menu_item(1, self.t('menu_player'))
-            self.print_menu_item(2, self.t('menu_settings'))
-            self.print_menu_item(3, self.t('menu_exit'))
-
-            choice = self.input_prompt()
-            if choice == '1':
+            self.header(self.t('app_title'))
+            print(f"{C_ACCENT}[1] {C_TEXT}{self.t('menu_player')}")
+            print(f"{C_ACCENT}[2] {C_TEXT}{self.t('menu_settings')}")
+            print(f"{C_ACCENT}[3] {C_TEXT}{self.t('menu_exit')}")
+            c = self.prompt()
+            if c == '1':
                 self.menu_player()
-            elif choice == '2':
+            elif c == '2':
                 self.menu_settings()
-            elif choice == '3':
+            elif c == '3':
                 sys.exit()
 
     def menu_settings(self):
         while True:
             self.clear()
-            self.print_header(self.t('settings_title'))
-
-            avail_langs = []
+            self.header(self.t('settings_title'))
+            langs = []
             if os.path.exists(LOCALES_DIR):
                 for f in os.listdir(LOCALES_DIR):
                     if f.endswith('.json'):
                         try:
-                            with open(os.path.join(LOCALES_DIR, f), 'r', encoding='utf-8') as file:
-                                name = json.load(file).get('lang_name', f[:-5])
-                                avail_langs.append({'code': f[:-5], 'name': name})
+                            with open(os.path.join(LOCALES_DIR, f), encoding='utf-8') as fl:
+                                langs.append((f[:-5], json.load(fl).get('lang_name', '?')))
                         except:
-                            continue
+                            pass
 
-            print(f"{C_TEXT}{self.t('settings_lang_title')}\n")
+            print(f"{C_TEXT}{self.t('settings_lang_title')}")
+            for i, (code, name) in enumerate(langs):
+                marker = f"{C_SUCCESS}●" if code == self.lang else f"{C_TEXT}○"
+                print(f"{C_ACCENT}[{i + 1}] {marker} {C_TEXT}{name}")
 
-            for i, l in enumerate(avail_langs):
-                is_current = (l['code'] == self.lang)
-                marker = f"{C_SUCCESS}●" if is_current else f"{C_TEXT}○"
-                print(f"{C_ACCENT}[{i + 1}] {marker} {C_TEXT}{l['name']}")
-
-            self.print_back_option()
+            self.print_back()
             print(f"{C_TEXT}{self.t('settings_select')}")
-
             try:
-                choice = self.input_prompt()
-                if choice == '0': return
-                idx = int(choice) - 1
-                if 0 <= idx < len(avail_langs):
-                    self.lang = avail_langs[idx]['code']
-                    self.save_config()
+                c = self.prompt();
+                if c == '0': return
+                idx = int(c) - 1
+                if 0 <= idx < len(langs):
+                    self.lang = langs[idx][0];
+                    self.save_config();
                     self.load_locale()
-                    print(f"{C_SUCCESS}OK")
-                    time.sleep(0.5)
+                    print(f"{C_SUCCESS}OK");
+                    time.sleep(0.3)
             except:
                 continue
 
@@ -290,119 +394,137 @@ class BardApp:
             files = []
             if os.path.exists(TRACKS_DIR):
                 files = [f for f in os.listdir(TRACKS_DIR) if f.lower().endswith(('.mid', '.midi'))]
-
-            self.print_header(self.t('player_list_title'))
+            self.header(self.t('player_list_title'))
             if not files:
-                print(f"{C_ERROR}{self.t('player_no_files')}")
-                self.print_back_option()
-                self.input_prompt()
+                print(f"{C_ERROR}{self.t('player_no_files')}");
+                self.print_back();
+                self.prompt();
                 return
 
-            for i, f in enumerate(files):
-                self.print_menu_item(i + 1, f)
-
-            self.print_back_option()
+            for i, f in enumerate(files): print(f"{C_ACCENT}[{i + 1}] {C_TEXT}{f}")
+            self.print_back();
             print(f"{C_TEXT}{self.t('player_select')}")
 
             try:
-                raw = self.input_prompt()
-                if raw == '0': return
-                idx = int(raw) - 1
-                if 0 <= idx < len(files):
-                    full_path = os.path.join(TRACKS_DIR, files[idx])
-                    self.play_logic(full_path, files[idx])
+                c = self.prompt()
+                if c == '0': return
+                idx = int(c) - 1
+                if 0 <= idx < len(files): self.flow_setup(os.path.join(TRACKS_DIR, files[idx]), files[idx])
             except:
                 continue
 
-    def play_logic(self, full_path, display_name):
+    def flow_setup(self, path, name):
         print(f"\n{C_TEXT}{self.t('player_analyzing')}")
-        notes = self.get_clean_notes(full_path)
-        shift = self.analyze_best_shift(notes)
+        notes = self.get_notes(path)
+        (sh21, s21, f21, sh36, s36, f36) = self.analyze(notes)
 
-        total = len(notes) or 1
-        s_hits = sum(1 for n in notes if
-                     GAME_MIN_NOTE <= (n + shift) <= GAME_MAX_NOTE and ((n + shift) % 12) in SCALE_WHITE_KEYS)
-        f_hits = sum(1 for n in notes if ((n + shift) % 12) in SCALE_WHITE_KEYS)
-        pct_s, pct_f = (s_hits / total) * 100, (f_hits / total) * 100
+        # STEP 1
+        self.clear()
+        self.header(self.t('step_layout_title'))
 
-        rec_mode = 1 if pct_s >= 90 else 2
-        rec_str = "Strict" if rec_mode == 1 else "Fold"
-
+        print(f"{C_TEXT}{self.t('stat_header')}")
         print(
-            f"{C_TEXT}{self.t('player_stats')}: {C_SUCCESS}{pct_s:.0f}% Strict {C_TEXT}| {C_SUCCESS}{pct_f:.0f}% Fold")
-        print(f"{C_SUCCESS}{self.t('rec_title')}: {rec_str.upper()} {C_TEXT}({self.t('ui_shift_label')}: {shift})")
+            f"{C_ACCENT}{self.t('layout_21'):<30} {self.color_stat(f21)}{f21:.0f}% {C_TEXT}{self.t('stat_compatible')}")
+        print(
+            f"{C_ACCENT}{self.t('layout_36'):<30} {self.color_stat(f36)}{f36:.0f}% {C_TEXT}{self.t('stat_compatible')}")
 
-        print(f"\n{C_TITLE}{self.t('mode_title').upper()}")
+        rec_layout = 36
+        reason = self.t('rec_layout_36_reason')
+        if s21 >= 98:
+            rec_layout = 21; reason = self.t('rec_layout_21_reason')
+        elif f21 >= 98:
+            rec_layout = 21; reason = self.t('rec_layout_21_reason')
+
+        print(f"\n{C_SUCCESS}{self.t('rec_title')}: {C_TEXT}{reason}")
         print(f"{SEPARATOR}")
-        print(f"{C_ACCENT}[1] {C_TEXT}Strict {C_TEXT}- {self.t('mode_strict_desc')}")
-        print(f"{C_ACCENT}[2] {C_TEXT}Fold   {C_TEXT}- {self.t('mode_fold_desc')}")
-        print(f"{C_ACCENT}[3] {C_TEXT}Melody {C_TEXT}- {self.t('mode_melody_desc')}")
-
-        self.print_back_option()
-        print(f"{C_TEXT}{self.t('mode_auto')}")
+        print(f"{C_ACCENT}[1] {C_TEXT}{self.t('layout_21')}")
+        print(f"{C_ACCENT}[2] {C_TEXT}{self.t('layout_36')}")
+        self.print_back();
+        print(f"{C_TEXT}{self.t('ui_auto')}")
 
         try:
-            m_in = self.input_prompt()
-            if m_in == '0': return
-            mode = int(m_in) if m_in else rec_mode
+            l = self.prompt()
+            if l == '0': return
+            layout = 36 if l == '2' else 21 if l == '1' else rec_layout
+        except:
+            layout = rec_layout
+
+        # STEP 2
+        self.clear()
+        self.header(self.t('step_mode_title'))
+
+        ts = s36 if layout == 36 else s21
+        tf = f36 if layout == 36 else f21
+        shift = sh36 if layout == 36 else sh21
+
+        print(f"{C_TEXT}{self.t('stat_header')} ({layout})")
+        print(f"{C_TEXT}{self.t('mode_strict'):<20} {self.color_stat(ts)}{ts:.0f}%")
+        print(f"{C_TEXT}{self.t('mode_fold'):<20} {self.color_stat(tf)}{tf:.0f}%")
+
+        rec_mode = 2
+        rm = self.t('rec_mode_fold_reason')
+        if ts >= 99: rec_mode = 1; rm = self.t('rec_mode_strict_reason')
+
+        print(f"\n{C_SUCCESS}{self.t('rec_title')}: {C_TEXT}{rm}")
+        print(f"{SEPARATOR}")
+        print(f"{C_ACCENT}[1] {C_TEXT}{self.t('mode_strict')} {C_DIM}- {self.t('desc_strict')}")
+        print(f"{C_ACCENT}[2] {C_TEXT}{self.t('mode_fold')}   {C_DIM}- {self.t('desc_fold')}")
+        print(f"{C_ACCENT}[3] {C_TEXT}{self.t('mode_melody')} {C_DIM}- {self.t('desc_melody')}")
+        self.print_back();
+        print(f"{C_TEXT}{self.t('ui_auto')}")
+
+        try:
+            m = self.prompt()
+            if m == '0': return
+            mode = int(m) if m else rec_mode
         except:
             mode = rec_mode
 
         if mode == 3 and notes: shift = GAME_MAX_NOTE - max(notes)
 
+        # READY
         self.clear()
-        self.print_header(display_name)
-
-        print(f"{C_TEXT}{self.t('ui_mode_label')}: {C_ACCENT}{mode}")
-        print(f"{C_TEXT}{self.t('ui_shift_label')}: {C_ACCENT}{shift}\n")
+        self.header(name)
+        print(f"{C_TEXT}{self.t('ui_layout')}: {C_ACCENT}{layout}")
+        print(f"{C_TEXT}{self.t('ui_mode')}:   {C_ACCENT}{mode} {C_DIM}({self.t('ui_shift')}: {shift})\n")
 
         print(f"{C_TEXT}{self.t('play_ready')}")
-        print(f"{C_ACCENT}{self.t('play_controls_pre')}")
-        self.print_back_option()
+        print(f"{C_ACCENT}{self.t('play_ctrl_start')}")
+        self.print_back()
 
-        start_playing = False
+        start = False
         while True:
-            if keyboard.is_pressed(BIND_START):
-                start_playing = True
-                break
-            if keyboard.is_pressed(BIND_STOP) or keyboard.is_pressed('0'):
-                start_playing = False
-                break
+            if keyboard.is_pressed(BIND_START): start = True; break
+            if keyboard.is_pressed(BIND_STOP) or keyboard.is_pressed('0'): break
             time.sleep(0.01)
+        if not start: return
 
-        if not start_playing:
-            time.sleep(0.3)
-            return
-
-        print(f"\n{C_SUCCESS}{self.t('play_controls_active')}")
-
-        mid = mido.MidiFile(full_path)
+        print(f"\n{C_SUCCESS}{self.t('play_ctrl_active')}")
+        mid = mido.MidiFile(path)
         stop = False
         for msg in mid.play():
             if keyboard.is_pressed(BIND_STOP):
-                print(f"\n{C_ERROR}{self.t('play_stopped')}")
-                stop = True
+                print(f"\n{C_ERROR}{self.t('play_stopped')}");
+                stop = True;
                 break
             if msg.type == 'note_on' and msg.velocity > 0:
                 if hasattr(msg, 'channel') and msg.channel == 9: continue
-                key = self.process_note(msg.note, shift, mode)
-                if key: threading.Thread(target=self.press_worker, args=(key,), daemon=True).start()
+                k = self.get_key(msg.note, shift, mode, layout)
+                if k: self.engine.add_note(k[0], k[1])
 
-        time.sleep(0.2)
-        for r in KEYS.values():
-            for k in r: pydirectinput.keyUp(k)
-
+        time.sleep(0.3)
+        pydirectinput.keyUp('shift');
+        pydirectinput.keyUp('ctrl')
         if not stop: print(f"\n{C_SUCCESS}{self.t('play_done')}")
         time.sleep(1.5)
 
 
 if __name__ == "__main__":
     if not ctypes.windll.shell32.IsUserAnAdmin():
-        print(f"{C_ERROR}ERROR: Run as Admin required!")
+        print("Run as Admin!");
         input()
     else:
         try:
-            app = BardApp()
-            app.menu_main()
+            BardApp().menu_main()
         except KeyboardInterrupt:
             sys.exit()
