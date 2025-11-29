@@ -7,21 +7,20 @@ import keyboard
 import threading
 import json
 import sys
-from queue import Queue, Empty
 from colorama import init, Fore, Style
 
-# Сброс цвета
+try:
+    ctypes.windll.winmm.timeBeginPeriod(1)
+except:
+    pass
+
 init(autoreset=True)
 
-# --- CONFIG ---
 BIND_START = 'f8'
 BIND_STOP = 'esc'
 
-# Тайминги (Extreme Low Latency)
-BATCH_WINDOW = 0.02
-KEY_TAP = 0.002
-MOD_DELAY = 0.015
-
+PRESS_DURATION = 0.003
+MOD_GAP = 0.015
 pydirectinput.PAUSE = 0.0
 
 GAME_MIN_NOTE = 48
@@ -31,7 +30,6 @@ TRACKS_DIR = 'Music'
 LOCALES_DIR = 'locales'
 CONFIG_FILE = 'config.json'
 
-# --- MAPPINGS ---
 KEYS_21 = {
     3: ['z', 'x', 'c', 'v', 'b', 'n', 'm'],
     4: ['a', 's', 'd', 'f', 'g', 'h', 'j'],
@@ -47,7 +45,6 @@ MAP_36 = {
     10: [('m', 2), ('j', 2), ('u', 2)], 11: [('m', 0), ('j', 0), ('u', 0)]
 }
 
-# --- ПОЛНЫЕ ВСТРОЕННЫЕ ЯЗЫКИ (ЭТАЛОН) ---
 EMBEDDED_LOCALES = {
     "en": {
         "lang_name": "English",
@@ -64,6 +61,7 @@ EMBEDDED_LOCALES = {
         "player_no_files": "No MIDI files found in 'Music' folder.",
         "player_select": "Select track number:",
         "player_analyzing": "Analyzing Harmony...",
+        "player_rendering": "Pre-rendering events...",
         "step_layout_title": "Step 1: Choose Layout",
         "step_mode_title": "Step 2: Choose Mode",
         "stat_header": "COMPATIBILITY REPORT",
@@ -71,10 +69,10 @@ EMBEDDED_LOCALES = {
         "layout_21": "21 Keys (Standard)",
         "layout_36": "36 Keys (Chromatic)",
         "rec_title": "RECOMMENDATION",
-        "rec_layout_21_reason": "Simple track (White keys only).",
-        "rec_layout_36_reason": "Complex track (Contains accidentals).",
-        "rec_mode_strict_reason": "Fits perfectly in range.",
-        "rec_mode_fold_reason": "Wide range. Folding required.",
+        "rec_layout_21_reason": "Simple track. (Select: 21 Keys)",
+        "rec_layout_36_reason": "Complex track / Accidentals. (Select: 36 Keys)",
+        "rec_mode_strict_reason": "Fits perfectly in range. (Select: Strict)",
+        "rec_mode_fold_reason": "Wide range, folding required. (Select: Fold)",
         "mode_strict": "Strict",
         "mode_fold": "Fold",
         "mode_melody": "Melody",
@@ -87,6 +85,7 @@ EMBEDDED_LOCALES = {
         "ui_mode": "Mode",
         "ui_shift": "Transpose",
         "play_ready": "READY TO PLAY",
+        "play_info": "Engine: Pre-Render (Precision Mode)",
         "play_ctrl_start": "[F8] Start Playback",
         "play_ctrl_active": ">>> [F8] Playing...  |  [ESC] Stop <<<",
         "play_stopped": "Stopped.",
@@ -107,6 +106,7 @@ EMBEDDED_LOCALES = {
         "player_no_files": "Нет файлов в папке 'Music'.",
         "player_select": "Номер трека:",
         "player_analyzing": "Анализ гармонии...",
+        "player_rendering": "Пре-рендеринг событий...",
         "step_layout_title": "Шаг 1: Выбор раскладки",
         "step_mode_title": "Шаг 2: Выбор режима",
         "stat_header": "ОТЧЕТ О СОВМЕСТИМОСТИ",
@@ -114,10 +114,10 @@ EMBEDDED_LOCALES = {
         "layout_21": "21 Клавиша (Стандарт)",
         "layout_36": "36 Клавиш (Хроматика)",
         "rec_title": "РЕКОМЕНДАЦИЯ",
-        "rec_layout_21_reason": "Трек простой (Только белые клавиши).",
-        "rec_layout_36_reason": "Трек сложный (Есть черные клавиши).",
-        "rec_mode_strict_reason": "Все ноты влезают в диапазон.",
-        "rec_mode_fold_reason": "Широкий диапазон. Нужно сжатие.",
+        "rec_layout_21_reason": "Трек простой. (Выберите: 21 Клавиша)",
+        "rec_layout_36_reason": "Трек сложный / полутона. (Выберите: 36 Клавиш)",
+        "rec_mode_strict_reason": "Все ноты влезают. (Выберите: Strict)",
+        "rec_mode_fold_reason": "Широкий диапазон. (Выберите: Fold)",
         "mode_strict": "Strict (Чистый)",
         "mode_fold": "Fold (Полный)",
         "mode_melody": "Melody (Соло)",
@@ -130,6 +130,7 @@ EMBEDDED_LOCALES = {
         "ui_mode": "Режим",
         "ui_shift": "Сдвиг",
         "play_ready": "ГОТОВ К ЗАПУСКУ",
+        "play_info": "Движок: Pre-Render (Точный режим)",
         "play_ctrl_start": "[F8] Начать воспроизведение",
         "play_ctrl_active": ">>> [F8] Играет...  |  [ESC] Стоп <<<",
         "play_stopped": "Остановлено.",
@@ -137,7 +138,6 @@ EMBEDDED_LOCALES = {
     }
 }
 
-# --- THEME ---
 C_TITLE = Style.BRIGHT + Fore.WHITE
 C_TEXT = Style.BRIGHT + Fore.WHITE
 C_ACCENT = Fore.YELLOW
@@ -148,79 +148,110 @@ C_DIM = Fore.LIGHTBLACK_EX
 SEPARATOR = Fore.WHITE + "————————————————————"
 
 
-class InputEngine(threading.Thread):
-    def __init__(self):
-        super().__init__(daemon=True)
-        self.queue = Queue()
-        self.running = True
-        self.lock = threading.Lock()
+class MidiRenderer:
+    def __init__(self, filename, layout, mode, shift):
+        self.filename = filename
+        self.layout = layout
+        self.mode = mode
+        self.shift = shift
+        self.events = []
+        self.render()
 
-    def add_note(self, key, modifier):
-        self.queue.put((key, modifier))
+    def get_key_action(self, note):
+        final = note + self.shift
 
-    def run(self):
-        batch = []
-        last_time = 0
-        while self.running:
-            try:
-                if not batch:
-                    batch.append(self.queue.get(timeout=0.1))
-                    last_time = time.time()
-                while True:
-                    if self.queue.empty(): break
-                    if (time.time() - last_time) > BATCH_WINDOW: break
-                    try:
-                        batch.append(self.queue.get_nowait())
-                    except Empty:
-                        break
-                if batch:
-                    self.execute_batch(batch)
-                    batch = []
-            except Empty:
-                continue
-            except Exception as e:
-                print(e)
+        if self.mode == 2:
+            while final > GAME_MAX_NOTE: final -= 12
+            while final < GAME_MIN_NOTE: final += 12
+        elif self.mode == 1:
+            if not (GAME_MIN_NOTE <= final <= GAME_MAX_NOTE):
+                return None
+
+        octave = (final // 12) - 1
+        base = final % 12
+
+        if self.layout == 36:
+            if octave in [3, 4, 5]: return MAP_36[base][octave - 3]
+        else:
+            scale = {0: 0, 2: 1, 4: 2, 5: 3, 7: 4, 9: 5, 11: 6}
+            if base in scale and octave in KEYS_21:
+                return (KEYS_21[octave][scale[base]], 0)
+        return None
+
+    def render(self):
+        mid = mido.MidiFile(self.filename)
+        temp_timeline = {}
+        current_time = 0.0
+
+        for msg in mid:
+            current_time += msg.time
+            if msg.type == 'note_on' and msg.velocity > 0:
+                if hasattr(msg, 'channel') and msg.channel == 9: continue
+
+                action = self.get_key_action(msg.note)
+                if action:
+                    ts = round(current_time, 3)
+                    if ts not in temp_timeline: temp_timeline[ts] = []
+                    if action not in temp_timeline[ts]:
+                        temp_timeline[ts].append(action)
+
+        self.events = sorted(temp_timeline.items())
+
+    def play(self, stop_event):
+        if not self.events: return
+        start_perf = time.perf_counter()
+
+        for timestamp, actions in self.events:
+            if stop_event.is_set(): break
+
+            while True:
+                if stop_event.is_set(): return
+                current_perf = time.perf_counter() - start_perf
+                wait_time = timestamp - current_perf
+
+                if wait_time <= 0:
+                    break
+
+                if wait_time > 0.002:
+                    time.sleep(wait_time - 0.001)
+                else:
+                    pass
+
+            self.execute_batch(actions)
 
     def execute_batch(self, batch):
-        g_none, g_shift, g_ctrl = [], [], []
-        for k, m in batch:
-            if m == 0:
-                g_none.append(k)
-            elif m == 1:
-                g_shift.append(k)
-            elif m == 2:
-                g_ctrl.append(k)
+        g_none = [k for k, m in batch if m == 0]
+        g_shift = [k for k, m in batch if m == 1]
+        g_ctrl = [k for k, m in batch if m == 2]
 
-        with self.lock:
-            if g_none:
-                for k in g_none: pydirectinput.keyDown(k)
-                time.sleep(KEY_TAP)
-                for k in g_none: pydirectinput.keyUp(k)
-            if g_shift:
-                pydirectinput.keyDown('shift');
-                time.sleep(MOD_DELAY)
-                for k in g_shift: pydirectinput.keyDown(k)
-                time.sleep(KEY_TAP)
-                for k in g_shift: pydirectinput.keyUp(k)
-                time.sleep(0.002);
-                pydirectinput.keyUp('shift')
-            if g_ctrl:
-                pydirectinput.keyDown('ctrl');
-                time.sleep(MOD_DELAY)
-                for k in g_ctrl: pydirectinput.keyDown(k)
-                time.sleep(KEY_TAP)
-                for k in g_ctrl: pydirectinput.keyUp(k)
-                time.sleep(0.002);
-                pydirectinput.keyUp('ctrl')
+        if g_none:
+            for k in g_none: pydirectinput.keyDown(k)
+            time.sleep(PRESS_DURATION)
+            for k in g_none: pydirectinput.keyUp(k)
+
+        if (g_shift or g_ctrl) and g_none: time.sleep(MOD_GAP)
+
+        if g_shift:
+            pydirectinput.keyDown('shift')
+            for k in g_shift: pydirectinput.keyDown(k)
+            time.sleep(PRESS_DURATION)
+            for k in g_shift: pydirectinput.keyUp(k)
+            pydirectinput.keyUp('shift')
+
+        if g_ctrl and g_shift: time.sleep(MOD_GAP)
+
+        if g_ctrl:
+            pydirectinput.keyDown('ctrl')
+            for k in g_ctrl: pydirectinput.keyDown(k)
+            time.sleep(PRESS_DURATION)
+            for k in g_ctrl: pydirectinput.keyUp(k)
+            pydirectinput.keyUp('ctrl')
 
 
 class BardApp:
     def __init__(self):
         self.lang = 'en'
         self.texts = {}
-        self.engine = InputEngine()
-        self.engine.start()
-
         self.init_files()
         self.load_config()
         self.load_locale()
@@ -229,8 +260,6 @@ class BardApp:
         if not os.path.exists(TRACKS_DIR): os.makedirs(TRACKS_DIR)
         if not os.path.exists(LOCALES_DIR): os.makedirs(LOCALES_DIR)
 
-        # ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ ЛОКАЛИЗАЦИЮ ПРИ ЗАПУСКЕ
-        # Это гарантирует, что пользователь увидит новые тексты, а не старые версии файлов
         for code, content in EMBEDDED_LOCALES.items():
             path = os.path.join(LOCALES_DIR, f"{code}.json")
             try:
@@ -255,8 +284,11 @@ class BardApp:
             pass
 
     def load_locale(self):
-        # Пытаемся загрузить с диска, если не выходит - берем из памяти
         path = os.path.join(LOCALES_DIR, f'{self.lang}.json')
+        if not os.path.exists(path):
+            if self.lang in EMBEDDED_LOCALES:
+                pass
+
         if os.path.exists(path):
             try:
                 with open(path, 'r', encoding='utf-8') as f:
@@ -264,7 +296,7 @@ class BardApp:
                     return
             except:
                 pass
-        self.texts = EMBEDDED_LOCALES.get(self.lang, EMBEDDED_LOCALES['en'])
+        self.texts = {}
 
     def t(self, key):
         return self.texts.get(key, f"[{key}]")
@@ -274,6 +306,10 @@ class BardApp:
 
     def header(self, txt):
         print(f"\n{C_TITLE}{txt.upper()}\n{SEPARATOR}")
+
+    def print_item(self, idx, text, active=False):
+        marker = f"{C_SUCCESS}●" if active else f"{C_TEXT}○"
+        print(f"{C_ACCENT}[{idx}] {marker} {C_TEXT}{text}")
 
     def prompt(self):
         return input(f"\n{C_INPUT}> {Style.RESET_ALL}")
@@ -306,7 +342,6 @@ class BardApp:
                 t = n + sh
                 if (t % 12) in scale_21 and GAME_MIN_NOTE <= t <= GAME_MAX_NOTE: hits += 1
             if hits > max_s21: max_s21, best_sh21 = hits, sh
-
         fold_hits_21 = sum(1 for n in notes if ((n + best_sh21) % 12) in scale_21)
 
         best_sh36 = 0;
@@ -317,22 +352,6 @@ class BardApp:
 
         return (best_sh21, (max_s21 / total) * 100, (fold_hits_21 / total) * 100,
                 best_sh36, (max_s36 / total) * 100, 100.0)
-
-    def get_key(self, note, shift, mode, layout):
-        final = note + shift
-        if mode == 2:
-            while final > GAME_MAX_NOTE: final -= 12
-            while final < GAME_MIN_NOTE: final += 12
-        oct = (final // 12) - 1
-        base = final % 12
-
-        if layout == 36:
-            if oct in [3, 4, 5]: return MAP_36[base][oct - 3]
-        else:
-            scale = {0: 0, 2: 1, 4: 2, 5: 3, 7: 4, 9: 5, 11: 6}
-            if base in scale and oct in KEYS_21:
-                return (KEYS_21[oct][scale[base]], 0)
-        return None
 
     def color_stat(self, val):
         if val >= 99: return C_SUCCESS
@@ -370,13 +389,11 @@ class BardApp:
 
             print(f"{C_TEXT}{self.t('settings_lang_title')}")
             for i, (code, name) in enumerate(langs):
-                marker = f"{C_SUCCESS}●" if code == self.lang else f"{C_TEXT}○"
-                print(f"{C_ACCENT}[{i + 1}] {marker} {C_TEXT}{name}")
-
+                self.print_item(i + 1, name, code == self.lang)
             self.print_back()
             print(f"{C_TEXT}{self.t('settings_select')}")
             try:
-                c = self.prompt();
+                c = self.prompt()
                 if c == '0': return
                 idx = int(c) - 1
                 if 0 <= idx < len(langs):
@@ -418,10 +435,8 @@ class BardApp:
         notes = self.get_notes(path)
         (sh21, s21, f21, sh36, s36, f36) = self.analyze(notes)
 
-        # STEP 1
         self.clear()
         self.header(self.t('step_layout_title'))
-
         print(f"{C_TEXT}{self.t('stat_header')}")
         print(
             f"{C_ACCENT}{self.t('layout_21'):<30} {self.color_stat(f21)}{f21:.0f}% {C_TEXT}{self.t('stat_compatible')}")
@@ -430,10 +445,7 @@ class BardApp:
 
         rec_layout = 36
         reason = self.t('rec_layout_36_reason')
-        if s21 >= 98:
-            rec_layout = 21; reason = self.t('rec_layout_21_reason')
-        elif f21 >= 98:
-            rec_layout = 21; reason = self.t('rec_layout_21_reason')
+        if s21 >= 98 or f21 >= 98: rec_layout = 21; reason = self.t('rec_layout_21_reason')
 
         print(f"\n{C_SUCCESS}{self.t('rec_title')}: {C_TEXT}{reason}")
         print(f"{SEPARATOR}")
@@ -449,7 +461,6 @@ class BardApp:
         except:
             layout = rec_layout
 
-        # STEP 2
         self.clear()
         self.header(self.t('step_mode_title'))
 
@@ -482,16 +493,19 @@ class BardApp:
 
         if mode == 3 and notes: shift = GAME_MAX_NOTE - max(notes)
 
-        # READY
+        print(f"\n{C_TEXT}{self.t('player_rendering')}")
+        renderer = MidiRenderer(path, layout, mode, shift)
+
         self.clear()
         self.header(name)
-        print(f"{C_TEXT}{self.t('ui_layout')}: {C_ACCENT}{layout}")
+        print(f"{C_TEXT}{self.t('ui_layout')}: {C_ACCENT}{layout} {C_TEXT}| {self.t('play_info')}")
         print(f"{C_TEXT}{self.t('ui_mode')}:   {C_ACCENT}{mode} {C_DIM}({self.t('ui_shift')}: {shift})\n")
 
         print(f"{C_TEXT}{self.t('play_ready')}")
         print(f"{C_ACCENT}{self.t('play_ctrl_start')}")
         self.print_back()
 
+        stop_event = threading.Event()
         start = False
         while True:
             if keyboard.is_pressed(BIND_START): start = True; break
@@ -500,22 +514,25 @@ class BardApp:
         if not start: return
 
         print(f"\n{C_SUCCESS}{self.t('play_ctrl_active')}")
-        mid = mido.MidiFile(path)
-        stop = False
-        for msg in mid.play():
+
+        play_thread = threading.Thread(target=renderer.play, args=(stop_event,))
+        play_thread.start()
+
+        while play_thread.is_alive():
             if keyboard.is_pressed(BIND_STOP):
-                print(f"\n{C_ERROR}{self.t('play_stopped')}");
-                stop = True;
+                stop_event.set()
+                print(f"\n{C_ERROR}{self.t('play_stopped')}")
                 break
-            if msg.type == 'note_on' and msg.velocity > 0:
-                if hasattr(msg, 'channel') and msg.channel == 9: continue
-                k = self.get_key(msg.note, shift, mode, layout)
-                if k: self.engine.add_note(k[0], k[1])
+            time.sleep(0.05)
+
+        play_thread.join()
 
         time.sleep(0.3)
         pydirectinput.keyUp('shift');
         pydirectinput.keyUp('ctrl')
-        if not stop: print(f"\n{C_SUCCESS}{self.t('play_done')}")
+
+        if not stop_event.is_set():
+            print(f"\n{C_SUCCESS}{self.t('play_done')}")
         time.sleep(1.5)
 
 
